@@ -207,7 +207,9 @@ Memory_Layout :: struct {
 // ----------------------------- Global ------------------------------------
 
 gpu_init :: () {
+    result: VkResult;
 
+    app_info: VkApplicationInfo;
 }
 
 gpu_shutdown :: () {
@@ -354,4 +356,4 @@ gpu_draw_indexed_instanced :: (cmd: Gpu_Command_Buffer, vertex_data: Gpu_Ptr, in
 
 #scope_module
 
-vk :: #import "Vulkan_With_VMA";
+#import,file "modules/Vulkan_With_VMA/module.jai";
