@@ -1,0 +1,4 @@
+main :: () {
+}
+
+#load "module.jai";
