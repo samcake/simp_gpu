@@ -211,6 +211,13 @@ gpu_shutdown :: () {
 
     gpu_collect_garbage();
 
+    // #TODO: gpu collect garbage should take care of this in the future. for now it is necessary until that is implemented.
+    for arena : cmd_pools {
+        for arena.all_pools {
+            vkDestroyCommandPool(vk_device, it.vk_cmd_pool, null);
+        }
+    }
+
     for queues {
         vkDestroySemaphore(vk_device, it.timeline, null);
     }
@@ -269,6 +276,7 @@ gpu_get_queue :: (queue_type: Gpu_Queue_Type, queue_index: u32) -> Gpu_Queue {
 }
 
 gpu_start_command_recording :: (queue_handle: Gpu_Queue) -> Gpu_Command_Buffer {
+    // #todo: factor out
     queue_index := queue_handle - 1;
     assert(queue_index < queues.count);
     queue := *queues[queue_index];
@@ -328,14 +336,30 @@ gpu_start_command_recording :: (queue_handle: Gpu_Queue) -> Gpu_Command_Buffer {
     return cmd_buff_handle;
 }
 
-gpu_submit :: (queue: Gpu_Queue, buffer: Gpu_Command_Buffer) {
+gpu_submit :: (queue_handle: Gpu_Queue, buffer: Gpu_Command_Buffer) {
     assert(buffer != 0);
     index := (buffer - 1);
     assert(index < live_pools.count);
     pool := live_pools[index];
 
+    // #todo: factor out
+    queue_index := queue_handle - 1;
+    assert(queue_index < queues.count);
+    queue := *queues[queue_index];
 
-    //vkQueueSubmit()
+    queue_timeline_value := atomic_add(*queue.timeline_value, 1);
+
+    signal_values := u64.[queue_timeline_value];
+
+    timeline_info := VkTimelineSemaphoreSubmitInfo.{
+        signalSemaphoreValueCount = signal_values.count.(u32),
+        pSignalSemaphoreValues = signal_values.data,
+    };
+
+    submit_info := VkSubmitInfo.{
+        pNext = *timeline_info,
+    };
+    vkQueueSubmit(queue.vk_queue, 1, *submit_info, VK_NULL_HANDLE);
 }
 
 // ----------------------------- Semaphores ------------------------------------
@@ -700,8 +724,8 @@ create_device :: () {
         queue_index: u32 = 0;
         for queue_create_infos {
             for queue_index_in_family : 0..it.queueCount-1 {
-                vkGetDeviceQueue(vk_device, it.queueFamilyIndex, queue_index_in_family, *queues[queue_index].queue);
-                assert(queues[queue_index].queue != VK_NULL_HANDLE);
+                vkGetDeviceQueue(vk_device, it.queueFamilyIndex, queue_index_in_family, *queues[queue_index].vk_queue);
+                assert(queues[queue_index].vk_queue != VK_NULL_HANDLE);
                 queues[queue_index].family = it.queueFamilyIndex;
                 queue_index += 1;
             }
@@ -755,7 +779,7 @@ vk_device: VkDevice;
 vma: VmaAllocator;
 
 Queue :: struct {
-    queue: VkQueue;
+    vk_queue: VkQueue;
     family: u32;
     index: u32;
     type: Gpu_Queue_Type;

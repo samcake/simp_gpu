@@ -13,6 +13,8 @@ main :: () {
 
     cmd_buff := gpu_start_command_recording(main_queue);
 
+    gpu_submit(main_queue, cmd_buff);
+
     gpu_shutdown();
 }
 
