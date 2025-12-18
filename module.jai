@@ -211,7 +211,6 @@ gpu_shutdown :: () {
 
     gpu_collect_garbage();
 
-    // #TODO: gpu collect garbage should take care of this in the future. for now it is necessary until that is implemented.
     for arena : cmd_pools {
         for arena.all_pools {
             vkDestroyCommandPool(vk_device, it.vk_cmd_pool, null);
@@ -234,7 +233,26 @@ gpu_shutdown :: () {
 }
 
 gpu_collect_garbage :: () {
+    for * arena, queue_index : cmd_pools {
+        queue := *queues[queue_index];
+        current_timeline_value: u64;
+        vk_result := vkGetSemaphoreCounterValue(vk_device, queue.timeline, *current_timeline_value);
+        assert_vk_result(vk_result);
 
+        for garbage_pools[queue_index] {
+            if it.submit_timeline_value <= current_timeline_value {
+                vk_result = vkResetCommandPool(vk_device, it.item.vk_cmd_pool, 0);
+                assert_vk_result(vk_result);
+                
+                array_add(*arena.available_pools, it.item);
+            }
+        }
+    }
+}
+
+// #TODO: is this required?
+gpu_wait_idle :: () {
+    vkDeviceWaitIdle(vk_device);
 }
 
 // ----------------------------- Textures ------------------------------------
@@ -360,6 +378,9 @@ gpu_submit :: (queue_handle: Gpu_Queue, buffer: Gpu_Command_Buffer) {
         pNext = *timeline_info,
     };
     vkQueueSubmit(queue.vk_queue, 1, *submit_info, VK_NULL_HANDLE);
+
+    live_pools[index] = null;
+    array_add(*garbage_pools[queue_index], .{queue_timeline_value, pool});
 }
 
 // ----------------------------- Semaphores ------------------------------------
@@ -823,7 +844,8 @@ Garbage :: struct(T: Type) {
 }
 
 live_pools: [MAX_COMMAND_POOLS * NUM_QUEUE_FAMILIES] *Command_Pool;
-garbage_pools: [..] Garbage(*Command_Pool);
+// #TODO: fixed size allocation but can resizeable count within that buffer.
+garbage_pools: [NUM_QUEUE_FAMILIES] [..] Garbage(*Command_Pool);
 
 MAX_BUFFERS :: 10000;
 MAX_IMAGES  :: 10000;

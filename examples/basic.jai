@@ -15,6 +15,13 @@ main :: () {
 
     gpu_submit(main_queue, cmd_buff);
 
+    gpu_wait_idle();
+    gpu_collect_garbage();
+
+    cmd_buff = gpu_start_command_recording(main_queue);
+
+    gpu_submit(main_queue, cmd_buff);
+
     gpu_shutdown();
 }
 
