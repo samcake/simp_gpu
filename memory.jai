@@ -8,13 +8,17 @@ Memory_Type :: enum {
 
 gpu_malloc :: (size: s64, memory_type: Memory_Type = .DEFAULT) -> (mapped: *void, gpu: Gpu_Ptr) {
     memory_flags: VkMemoryPropertyFlagBits;
+    memory_usage_flags: VmaMemoryUsage;
     if #complete memory_type == {
         case .DEFAULT;
             memory_flags |= .HOST_VISIBLE_BIT | .HOST_COHERENT_BIT;
+            memory_usage_flags |= .CPU_TO_GPU;
         case .GPU;
             memory_flags |= .DEVICE_LOCAL_BIT;
+            memory_usage_flags |= .GPU_ONLY;
         case .READBACK;
             memory_flags |= .HOST_VISIBLE_BIT | .HOST_CACHED_BIT | .HOST_COHERENT_BIT;
+            memory_usage_flags |= .GPU_TO_CPU;
     }
 
     buffer_create_info := VkBufferCreateInfo.{
@@ -37,7 +41,8 @@ gpu_malloc :: (size: s64, memory_type: Memory_Type = .DEFAULT) -> (mapped: *void
 
     alloc_create_info := VmaAllocationCreateInfo.{
         flags = ifx memory_type != .GPU then .MAPPED_BIT,
-        requiredFlags = memory_flags
+        requiredFlags = memory_flags,
+        usage = memory_usage_flags,
     };
 
 
