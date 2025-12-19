@@ -379,6 +379,7 @@ gpu_shutdown :: () {
             vkDestroyDebugReportCallbackEXT(vk_instance, vk_debug_callback_handle, null);
         }
     }
+    destroy_bindless_buffer();
     vkDestroyDescriptorSetLayout(vk_device, bindless_set_layout, null);
     vmaDestroyAllocator(vma);
     vkDestroyDevice(vk_device, null);
@@ -682,10 +683,16 @@ create_device :: () {
         dynamic_rendering := VkPhysicalDeviceDynamicRenderingFeatures.{ pNext = chain, dynamicRendering = VK_TRUE };
         chain = *dynamic_rendering;
 
+        descriptor_buffer := VkPhysicalDeviceDescriptorBufferFeaturesEXT.{
+            pNext = chain,
+            descriptorBuffer = VK_TRUE,
+            descriptorBufferImageLayoutIgnored = VK_TRUE,
+        };
+        chain = *descriptor_buffer;
+
         vk12_features := VkPhysicalDeviceVulkan12Features.{
             pNext = chain,
             bufferDeviceAddress = VK_TRUE,
-            bufferDeviceAddressCaptureReplay = VK_TRUE,
             descriptorBindingPartiallyBound = VK_TRUE,
             descriptorBindingSampledImageUpdateAfterBind = VK_TRUE,
             descriptorBindingStorageBufferUpdateAfterBind = VK_TRUE,
@@ -795,11 +802,22 @@ create_device :: () {
 
     // load extension function pointers
     {
-        vkCmdBeginRenderingKHR = cast(PFN_vkCmdBeginRenderingKHR) vkGetDeviceProcAddr(vk_device, "vkCmdBeginRenderingKHR");
-        vkCmdEndRenderingKHR = cast(PFN_vkCmdEndRenderingKHR) vkGetDeviceProcAddr(vk_device, "vkCmdEndRenderingKHR");
-        assert(vkCmdBeginRenderingKHR != null);
-        assert(vkCmdEndRenderingKHR != null);
+        #insert #run generate_get_device_proc_addr("vkCmdBeginRenderingKHR");
+        #insert #run generate_get_device_proc_addr("vkCmdEndRenderingKHR");
+        #insert #run generate_get_device_proc_addr("vkGetDescriptorSetLayoutSizeEXT");
+        #insert #run generate_get_device_proc_addr("vkGetDescriptorSetLayoutBindingOffsetEXT");
+        #insert #run generate_get_device_proc_addr("vkGetDescriptorSetLayoutBindingOffsetEXT");
+        #insert #run generate_get_device_proc_addr("vkGetDescriptorEXT");
     }
+}
+
+generate_get_device_proc_addr :: (proc_name: string) ->string #compile_time {
+    INSERT_STRING :: #string DONE
+        %1 = cast(PFN_%1) vkGetDeviceProcAddr(vk_device, "%1");
+        assert(%1 != null);
+    DONE;
+
+    return tprint(INSERT_STRING, proc_name);
 }
 
 vk_instance: VkInstance;

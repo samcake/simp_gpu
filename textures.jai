@@ -72,6 +72,7 @@ gpu_texture_view :: (texture_handle: Gpu_Texture, desc: Gpu_View_Desc = .{}) -> 
 
     array_add(*texture.views, handle);
 
+    write_texture_descriptor(vk_view, handle);
     return handle;
 }
 

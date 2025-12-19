@@ -22,7 +22,6 @@ gpu_malloc :: (size: s64, memory_type: Memory_Type = .DEFAULT) -> (mapped: *void
     }
 
     buffer_create_info := VkBufferCreateInfo.{
-        flags = .DEVICE_ADDRESS_CAPTURE_REPLAY_BIT,
         usage = .STORAGE_BUFFER_BIT | .SHADER_DEVICE_ADDRESS_BIT,
         size = size.(u64),
         sharingMode = .CONCURRENT,
