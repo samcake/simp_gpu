@@ -39,6 +39,17 @@ main :: () {
         .{-0.5, -0.5},
         .{-0.5, +0.5},
     ];
+    vertex_colors, colors_gpu := gpu_malloc(4 * 3 * size_of(float));
+    vertex_colors.(*[12] float).* = .[
+        1., 0., 0.,
+        0., 1., 0.,
+        0., 0., 1.,
+        1., 1., 1.,
+    ];
+
+    param_block, vertex_params_gpu := gpu_malloc(2 * size_of(Gpu_Ptr));
+    param_block.(*Gpu_Ptr)[0] = vertex_gpu;
+    param_block.(*Gpu_Ptr)[1] = colors_gpu;
 
     index_buffer, index_gpu := gpu_malloc(6 * size_of(u32));
     index_buffer.(*[6] u32).* = .[
@@ -66,7 +77,7 @@ main :: () {
         gpu_begin_render_pass(cmd_buff, render_desc);
 
         gpu_set_pipeline(cmd_buff, graphics_pipeline);
-        gpu_draw_indexed_instanced(cmd_buff, vertex_gpu, pixel_gpu, index_gpu, 6, 1);
+        gpu_draw_indexed_instanced(cmd_buff, vertex_params_gpu, pixel_gpu, index_gpu, 6, 1);
 
         gpu_end_render_pass(cmd_buff);
     }
