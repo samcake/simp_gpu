@@ -1,4 +1,4 @@
-#module_parameters(VALIDATION := false);
+#module_parameters(VALIDATION := false, ENABLE_RENDER_CAPTURE := false);
 
 Gpu_Pipeline :: #type,distinct s64;
 
@@ -30,14 +30,25 @@ Depth_Flags :: enum_flags u8 {
 }
 
 Op :: enum {
-    NEVER;
-    LESS;
-    EQUAL;
-    LESS_EQUAL;
-    GREATER;
-    NOT_EQUAL;
-    GREATER_EQUAL;
-    ALWAYS;
+    NEVER            :: 0;
+    LESS             :: 1;
+    EQUAL            :: 2;
+    LESS_OR_EQUAL    :: 3;
+    GREATER          :: 4;
+    NOT_EQUAL        :: 5;
+    GREATER_OR_EQUAL :: 6;
+    ALWAYS           :: 7;
+}
+
+Load_Op :: enum {
+    LOAD        :: 0;
+    CLEAR       :: 1;
+    DONT_CARE   :: 2;
+}
+
+Store_Op :: enum {
+    STORE       :: 0;
+    DONT_CARE   :: 1;
 }
 
 Stencil_Op :: enum {
@@ -266,16 +277,30 @@ Usage_Flags :: enum_flags {
 }
 
 Stage :: enum {
-    TRANSFER;
-    COMPUTE;
-    RASTER_COLOR_OUT;
-    PIXEL_SHADER;
-    VERTEX_SHADER;
-    // #todo:
+    TOP_OF_PIPE             :: 0x00000001;
+    DRAW_INDIRECT           :: 0x00000002;
+    VERTEX_INPUT            :: 0x00000004;
+    VERTEX_SHADER           :: 0x00000008;
+    PIXEL_SHADER            :: 0x00000080;
+    MESH_SHADER             :: 0x00100000;
+    EARLY_FRAGMENT_TESTS    :: 0x00000100;
+    LATE_FRAGMENT_TESTS     :: 0x00000200;
+    COLOR_ATTACHMENT_OUTPUT :: 0x00000400;
+    COMPUTE_SHADER          :: 0x00000800;
+    TRANSFER                :: 0x00001000;
+    BOTTOM_OF_PIPE          :: 0x00002000;
+    HOST                    :: 0x00004000;
+    ALL                     :: 0x00010000;
 }
 
-Hazard_Flags :: enum {
-    // #todo:
+Hazard_Flags :: enum_flags {
+    NONE          :: 0x0;
+    // Flushes (GPU) writes to indirect draw args.
+    DRAW_ARGS     :: 0x1;
+    // Flushes (GPU) writes to descriptor buffer.
+    DESCRIPTORS   :: 0x2;
+    // Flushes (GPU) writes to depth and stencil buffers.
+    DEPTH_STENCIL :: 0x4;
 }
 
 Signal :: enum {
@@ -368,12 +393,12 @@ Gpu_View_Desc :: struct {
 }
 
 Gpu_Render_Pass_Attachment_Desc :: struct {
-    texture: Gpu_Texture;
-    load_op: Op;
-    store_op: Op;
+    view: Gpu_Texture_View;
+    load_op: Load_Op;
+    store_op: Store_Op;
     union {
         clear_value: float;
-        clear_color: [3] u8;
+        clear_color: [4] u32;
     };
 }
 
@@ -386,9 +411,13 @@ Gpu_Render_Pass_Desc :: struct {
 // ----------------------------- Global ------------------------------------
 
 gpu_init :: () {
+    #if ENABLE_RENDER_CAPTURE {
+        gpu_capture_init();
+    }
     create_instance();
     create_device();
     create_descriptor_buffer();
+    create_global_pipeline_layout();
 }
 
 gpu_shutdown :: () {
@@ -412,6 +441,8 @@ gpu_shutdown :: () {
             vkDestroyDebugReportCallbackEXT(vk_instance, vk_debug_callback_handle, null);
         }
     }
+
+    vkDestroyPipelineLayout(vk_device, vk_pipeline_layout, null);
     destroy_bindless_buffer();
     vkDestroyDescriptorSetLayout(vk_device, bindless_set_layout, null);
     vmaDestroyAllocator(vma);
@@ -476,11 +507,15 @@ gpu_destroy_semaphore :: (semaphore_handle: Gpu_Semaphore) {
     vkDestroySemaphore(vk_device, semaphore.vk_semaphore, null);
 }
 
+#load "pool.jai";
 #load "memory.jai";
 #load "command_buffer.jai";
 #load "textures.jai";
 #load "bindless.jai";
 #load "pipeline.jai";
+#load "shader_compiler.jai";
+#load "render_capture.jai";
+#load "gpu_arena.jai";
 
 #scope_module
 
@@ -543,6 +578,7 @@ create_instance :: () {
         enabled_validation_features := VkValidationFeatureEnableEXT.[
             //.GPU_ASSISTED_EXT,
             //.GPU_ASSISTED_RESERVE_BINDING_SLOT_EXT,
+            .SYNCHRONIZATION_VALIDATION_EXT,
         ];
 
         validation_features := VkValidationFeaturesEXT.{
@@ -710,6 +746,12 @@ create_device :: () {
         };
         chain = *descriptor_buffer;
 
+        synchronization2 := VkPhysicalDeviceSynchronization2Features.{
+            pNext = chain,
+            synchronization2 = VK_TRUE,
+        };
+        chain = *synchronization2;
+
         vk12_features := VkPhysicalDeviceVulkan12Features.{
             pNext = chain,
             bufferDeviceAddress = VK_TRUE,
@@ -752,6 +794,7 @@ create_device :: () {
             variablePointersStorageBuffer = VK_TRUE,
             variablePointers = VK_TRUE,
             storagePushConstant16 = VK_TRUE,
+            shaderDrawParameters = VK_TRUE,
         };
         chain = *vk11_features;
 
@@ -828,6 +871,7 @@ create_device :: () {
         #insert #run generate_get_device_proc_addr("vkGetDescriptorSetLayoutBindingOffsetEXT");
         #insert #run generate_get_device_proc_addr("vkGetDescriptorSetLayoutBindingOffsetEXT");
         #insert #run generate_get_device_proc_addr("vkGetDescriptorEXT");
+        #insert #run generate_get_device_proc_addr("vkCmdBindDescriptorBuffersEXT");
     }
 }
 
@@ -881,6 +925,12 @@ Semaphore :: struct {
     vk_semaphore: VkSemaphore;
 }
 
+get_semaphore :: (semaphore_handle: Gpu_Semaphore) -> VkSemaphore {
+    semaphore := pool_get(live_semaphores, semaphore_handle);
+    assert(semaphore != null);
+    return semaphore.vk_semaphore;
+}
+
 live_semaphores: Pool(Gpu_Semaphore, Semaphore);
 
 MAX_BUFFERS :: 10000;
@@ -888,6 +938,9 @@ MAX_IMAGES  :: 10000;
 
 MAX_COMPUTE_QUEUES  :: 4;
 MAX_TRANSFER_QUEUES :: 2;
+
+// 16 seems like a reasonable cap on this. Prevents some unnecessary heap allocations
+MAX_ATTACHMENTS :: 16;
 
 vkCmdBeginRenderingKHR : PFN_vkCmdBeginRenderingKHR;
 vkCmdEndRenderingKHR : PFN_vkCmdEndRenderingKHR;
@@ -926,5 +979,3 @@ vkCmdEndRenderingKHR : PFN_vkCmdEndRenderingKHR;
 #import "Math";
 #import "Bucket_Array";
 #import "Atomics";
-
-#load "pool.jai";

@@ -66,6 +66,14 @@ create_descriptor_buffer :: () {
     bindless_buffer.mapped = alloc_info.pMappedData;
 }
 
+bind_descriptor_buffer :: (cmd_buff: VkCommandBuffer) {
+    binding_info := VkDescriptorBufferBindingInfoEXT.{
+        address = bindless_buffer.gpu_ptr,
+        usage = .RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT,
+    };
+    vkCmdBindDescriptorBuffersEXT(cmd_buff, 1, *binding_info);
+}
+
 write_texture_descriptor :: (vk_view: VkImageView, index: Gpu_Texture_View) {
     binding_offset: VkDeviceSize;
     vkGetDescriptorSetLayoutBindingOffsetEXT(vk_device, bindless_set_layout, TEXTURE_BINDING, *binding_offset);
@@ -104,6 +112,7 @@ bindless_buffer: struct {
 vkGetDescriptorSetLayoutSizeEXT: PFN_vkGetDescriptorSetLayoutSizeEXT;
 vkGetDescriptorSetLayoutBindingOffsetEXT: PFN_vkGetDescriptorSetLayoutBindingOffsetEXT;
 vkGetDescriptorEXT: PFN_vkGetDescriptorEXT;
+vkCmdBindDescriptorBuffersEXT: PFN_vkCmdBindDescriptorBuffersEXT;
 
 align_forward :: (size: VkDeviceSize, align: VkDeviceSize) -> VkDeviceSize {
     return (size + align - 1) & ~(align - 1);

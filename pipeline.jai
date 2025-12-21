@@ -5,14 +5,11 @@ gpu_create_compute_pipeline :: (spirv: [] u8) -> Gpu_Pipeline {
 }
 
 gpu_create_graphics_pipeline :: (vertex_spirv: [] u8, pixel_spirv: [] u8, raster_desc: Gpu_Raster_Desc) -> Gpu_Pipeline {
-    if vk_pipeline_layout == VK_NULL_HANDLE {
-        create_global_pipeline_layout();
-    }
+    shader_stages := VkPipelineShaderStageCreateInfo.[
+        create_shader_stage(vertex_spirv, .VERTEX_BIT),
+        create_shader_stage(pixel_spirv, .FRAGMENT_BIT)
+    ];
 
-    shader_stages: [2] VkPipelineShaderStageCreateInfo;
-
-    // 16 seems like a reasonable cap on this to prevent heap allocating for no reason here.
-    MAX_ATTACHMENTS :: 16;
     attachment_formats: [MAX_ATTACHMENTS] VkFormat;
 
     assert(raster_desc.color_targets.count < attachment_formats.count);
@@ -28,9 +25,21 @@ gpu_create_graphics_pipeline :: (vertex_spirv: [] u8, pixel_spirv: [] u8, raster
         stencilAttachmentFormat = raster_desc.stencil_format.(VkFormat),
     };
 
+    // no vertex input. Everything is dynamically fetched.
+    vertex_input_state := VkPipelineVertexInputStateCreateInfo.{};
+
     input_assembly_state := VkPipelineInputAssemblyStateCreateInfo.{
         topology = raster_desc.topology.(VkPrimitiveTopology),
         primitiveRestartEnable = VK_FALSE,
+    };
+
+    viewport := VkViewport.{x = 0, y = 0, width = 1., height = 0, minDepth = 0., maxDepth = 1.};
+    scissor := VkRect2D.{offset = .{0, 0}, extent = .{0, 0}};
+    viewport_state := VkPipelineViewportStateCreateInfo.{
+        viewportCount = 1,
+        pViewports = *viewport,
+        scissorCount = 1,
+        pScissors = *scissor,
     };
 
     rasterization_state := VkPipelineRasterizationStateCreateInfo.{
@@ -65,7 +74,7 @@ gpu_create_graphics_pipeline :: (vertex_spirv: [] u8, pixel_spirv: [] u8, raster
     color_blend_state := VkPipelineColorBlendStateCreateInfo.{
         logicOpEnable = VK_FALSE,
         //logicOp
-        attachmentCount = attachment_blend_states.count.(u32),
+        attachmentCount = raster_desc.color_targets.count.(u32),
         pAttachments = attachment_blend_states.data,
     };
 
@@ -74,7 +83,7 @@ gpu_create_graphics_pipeline :: (vertex_spirv: [] u8, pixel_spirv: [] u8, raster
         // Fill some more space which can be filled by optional dynamic state:
         .MAX_ENUM, .MAX_ENUM, .MAX_ENUM, .MAX_ENUM, .MAX_ENUM, .MAX_ENUM,
     ];
-    num_dynamic_states := array_find(dynamic_states, .MAX_ENUM);
+    found, num_dynamic_states := array_find(dynamic_states, .MAX_ENUM);
 
     dynamic_state := VkPipelineDynamicStateCreateInfo.{
         dynamicStateCount = num_dynamic_states.(u32),
@@ -91,8 +100,9 @@ gpu_create_graphics_pipeline :: (vertex_spirv: [] u8, pixel_spirv: [] u8, raster
         pNext = *pipeline_rendering_create_info,
         stageCount = shader_stages.count.(u32),
         pStages = shader_stages.data,
-        //pVertexInputState,
+        pVertexInputState = *vertex_input_state,
         pInputAssemblyState = *input_assembly_state,
+        pViewportState = *viewport_state,
         pRasterizationState = *rasterization_state,
         pMultisampleState = *multisample_state,
         pColorBlendState = *color_blend_state,
@@ -105,13 +115,20 @@ gpu_create_graphics_pipeline :: (vertex_spirv: [] u8, pixel_spirv: [] u8, raster
 
     vk_pipeline: VkPipeline;
     vk_result := vkCreateGraphicsPipelines(vk_device, null, 1, *pipeline_create_info, null, *vk_pipeline);
+
+    for shader_stages {
+        vkDestroyShaderModule(vk_device, it.module, null);
+    }
     
-    pool_add(*live_pipelines, .{.GRAPHICS, vk_pipeline});
-    return 0;
+    handle := pool_add(*live_pipelines, .{.GRAPHICS, vk_pipeline});
+    return handle;
 }
 
 gpu_free_pipeline :: (pipeline: Gpu_Pipeline) {
+    removed, pipeline := pool_remove(*live_pipelines, pipeline);
+    assert(removed);
 
+    vkDestroyPipeline(vk_device, pipeline.vk_pipeline, null);
 }
 
 #scope_module
@@ -120,6 +137,15 @@ Pipeline_Type :: enum {
     GRAPHICS;
     COMPUTE;
 }
+
+Shader_Stage :: enum {
+    VERTEX  :: 0x1;
+    PIXEL   :: 0x10;
+    COMPUTE :: 0x20;
+    //MESH    :: 0x80;
+}
+
+NUM_SHADER_STAGES :: #run enum_values_as_enum(Shader_Stage).count;
 
 Pipeline :: struct {
     type: Pipeline_Type;
@@ -132,11 +158,40 @@ vk_pipeline_layout: VkPipelineLayout;
 live_pipelines: Pool(Gpu_Pipeline, Pipeline);
 
 create_global_pipeline_layout :: () {
-    // #todo: setup push consts to pass the single parameter block buffer pointer
+    push_const_ranges: [NUM_SHADER_STAGES] VkPushConstantRange;
+    ALL_STAGES :: #run enum_values_as_enum(Shader_Stage);
+    for ALL_STAGES {
+        push_const_ranges[it_index] = .{
+            offset = it_index.(u32) * size_of(VkDeviceAddress),
+            size = size_of(VkDeviceAddress),
+            stageFlags = it.(VkShaderStageFlags),
+        };
+    }
+
     create_info := VkPipelineLayoutCreateInfo.{
         setLayoutCount = 1,
         pSetLayouts = *bindless_set_layout,
+        pushConstantRangeCount = push_const_ranges.count.(u32),
+        pPushConstantRanges = push_const_ranges.data,
     };
     vk_result := vkCreatePipelineLayout(vk_device, *create_info, null, *vk_pipeline_layout);
     assert_vk_result(vk_result);
+}
+
+create_shader_stage :: (spirv: [] u8, stage: VkShaderStageFlagBits) -> VkPipelineShaderStageCreateInfo {
+    create_info := VkShaderModuleCreateInfo.{
+        codeSize = spirv.count.(u32),
+        pCode = spirv.data.(*u32),
+    };
+
+    vk_shader_module: VkShaderModule;
+    vk_result := vkCreateShaderModule(vk_device, *create_info, null, *vk_shader_module);
+    assert_vk_result(vk_result);
+
+    stage_create_info := VkPipelineShaderStageCreateInfo.{
+        stage = stage,
+        module = vk_shader_module,
+        pName = "main",
+    };
+    return stage_create_info;
 }

@@ -30,20 +30,6 @@ main :: () {
         gpu_destroy_semaphore(semaphore);
     }
 
-    {
-        texture_desc := Gpu_Texture_Desc.{
-            format = .R8G8B8A8_UNORM,
-            dimensions = .[1024, 1024, 1],
-            usage = .SAMPLED | .TRANSFER_DST
-        };
-        texture := gpu_create_texture(texture_desc);
-        view := gpu_texture_view(texture);
-
-        gpu_free(texture);
-    }
-
-    //graphics_pipeline := gpu_create_graphics_pipeline(.[], .[], .{});
-
     main_queue := gpu_get_queue(.MAIN, 0);
     c1_queue := gpu_get_queue(.COMPUTE, 0);
     c2_queue := gpu_get_queue(.COMPUTE, 1);
@@ -68,3 +54,5 @@ main :: () {
 }
 
 #import,file "../../simp_gpu/module.jai"(VALIDATION = true);
+#import "Basic";
+
